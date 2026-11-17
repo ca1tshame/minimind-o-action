@@ -1,0 +1,17 @@
+# Core model and training stack
+torch>=2.1
+transformers>=4.40
+safetensors>=0.4
+numpy>=1.24
+
+# Configuration and utilities
+PyYAML>=6.0
+filelock>=3.12
+Pillow>=10.0
+
+# BrowserGym / MiniWoB++ closed-loop evaluation stack
+# Installed separately because the sandbox also needs local Playwright browsers
+# and the MiniWoB++ html assets (see README).
+gymnasium>=0.29
+browsergym>=0.14
+playwright>=1.40

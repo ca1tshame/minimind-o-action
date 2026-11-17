@@ -1,0 +1,33 @@
+# Model weights and checkpoints
+*.pt
+*.bin
+*.safetensors
+*.pth
+*.ckpt
+
+# Raw datasets and media
+*.parquet
+*.jsonl
+*.json.gz
+*.png
+*.jpg
+*.jpeg
+*.mp4
+
+# Snapshots, cache and runtime artifacts
+snapshots/
+logs/
+outputs/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local environment and secrets
+.env
+*.lock
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db

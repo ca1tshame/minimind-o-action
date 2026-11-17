@@ -1,0 +1,160 @@
+# Central configuration for MiniMind-O Action.
+# All paths are relative to a workspace root supplied at run time (CLI/env);
+# no machine-specific absolute paths or credentials are stored here.
+
+model:
+  name: minimind-o-action
+  hidden_size: 768
+  num_hidden_layers: 8
+  vocab_size: 6400
+  num_attention_heads: 8
+  num_key_value_heads: 4
+  head_dim: 96
+  intermediate_size: 2432
+  max_position_embeddings: 2048
+  rope_theta: 1000000.0
+  tie_word_embeddings: true
+  use_moe: false
+  parameters: 63912192
+
+vision:
+  encoder: siglip2-base-p32-256
+  image_size: 256
+  in_dim: 768
+  image_token_id: 12
+  image_token: "<|image_pad|>"
+  tokens_per_image: 64
+  frozen: true
+  tile_layout:
+    320: [64, 64, 64, 64, 64]
+    160: [40, 30, 30, 30, 30]
+    128: [32, 24, 24, 24, 24]
+    64: [64, 0, 0, 0, 0]
+
+paths:
+  workspace_root: null          # set via --workspace-root or MINIMIND_WORKSPACE
+  tokenizer_dir: null           # directory with tokenizer.json / tokenizer_config.json
+  model_config: configs/model_config.json
+  vision_encoder_dir: null
+  pretrain_data: null
+  pretrain_index: null
+  sft_data: null
+  gui_records_train: null
+  gui_records_val: null
+  gui_frames_dir: null
+  base_checkpoint: null
+  checkpoint: null
+  experiment_dir: outputs/experiments
+  output_dir: outputs
+  miniwob_url: null             # file:// URL to MiniWoB++ html
+  playwright_browsers_path: null
+
+device:
+  device: cuda
+  precision: bf16
+  seed: 4225
+
+pretrain:
+  max_length: 380
+  micro_batch_size: 32
+  gradient_accumulation_steps: 8
+  epochs: 2
+  learning_rate: 0.0005
+  weight_decay: 0.0
+  grad_clip: 1.0
+  warmup_steps: 0
+  eval_samples: 512
+  checkpoint_interval_updates: 1000
+  reserve_seconds: 120
+
+long_pretrain:
+  max_context: 2048
+  accumulation: 16
+  epochs: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  warmup_updates: 100
+  validation_per_bucket: 64
+  checkpoint_interval: 500
+  reserve_seconds: 120
+
+sft:
+  max_length: 768
+  val_percent: 1
+  validation_max_samples: 8000
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  max_updates: 46667
+  epochs: 1
+  learning_rate: 0.0002
+  weight_decay: 0.0
+  grad_clip: 1.0
+  warmup_steps: 200
+  eval_interval: 500
+  checkpoint_interval: 2000
+  wall_seconds: 86400
+  reserve_seconds: 600
+  overflow_policy: truncate_complete_assistant
+
+gui_sft:
+  max_length: 512
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  max_updates: 507
+  epochs: 1
+  learning_rate_proj: 0.00002
+  learning_rate_lm: 0.000001
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 20
+  eval_interval: 100
+  checkpoint_interval: 200
+  wall_seconds: 28800
+  reserve_seconds: 600
+
+eval:
+  hist_used: 6
+  context: 512
+  vision_tokens: 320
+  max_steps: 20
+  max_new: 48
+  limit: 0
+  history_reserve_tokens: 32
+  kind_only_after: 2
+  protocols:
+    historical:
+      tasks:
+        - click-button-sequence
+        - click-checkboxes
+        - click-color
+        - click-dialog
+        - click-link
+        - click-test
+        - choose-list
+        - enter-text
+        - enter-text-2
+        - focus-text
+        - login-user
+        - login-user-popup
+        - scroll-text
+        - use-autocomplete
+      seeds: [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008,
+              9009, 9010, 9011, 9012, 9013, 9014, 9015]
+    unseen:
+      seed: 15101
+      tasks_per_seed: 32
+    long:
+      seed: 15101
+      num_tasks: 8
+      seeds_per_task: 8
+
+distill:
+  teacher_model: GUI-Owl-1.5-8B
+  action_balance: true
+  dedup_key: [episode_id, step, data_source]
+
+inference:
+  max_steps: 6
+  max_new: 24
+  default_task: click-dialog
