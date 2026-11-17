@@ -28,6 +28,9 @@ __pycache__/
 *.lock
 *.log
 
+# Local project metadata
+.workbuddy/
+
 # OS / editor files
 .DS_Store
 Thumbs.db
