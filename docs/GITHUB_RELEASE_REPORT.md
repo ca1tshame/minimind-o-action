@@ -159,9 +159,39 @@ redistributed. The project does not claim copyright over third-party packages.
 
 ## 12. Git
 
-See the final section of the delivery message and `git log` for the commit
-hash. Push is performed with a normal fast-forward `git push origin main`; no
-force push, no history rewrite.
+**Push: DONE / VERIFIED.** Fast-forward only, no force push, no history rewrite.
+
+```
+1b0f691  fix: align agent, training and evaluation with the V14 research mainline
+257aa1d  docs: correct reported metrics and add the release engineering report
+01a4007  chore: ignore local project metadata          (previous remote HEAD)
+
+push:  01a4007..257aa1d  main -> main
+remote: git ls-remote origin main -> 257aa1df7d0b7d7ac55a971499728c44f03dc1a9
+        gh api repos/.../commits/main -> same sha
+```
+
+54 files changed, 11,459 insertions, 1,236 deletions. Nothing matched
+`.workbuddy`, `.dsh-project-memory`, `*.safetensors`, `*.png`, `*.jsonl` or
+`outputs/` in the staged set (checked before committing).
+
+Pre-push verification actually run on the release machine:
+`python -m unittest discover -s tests -t .` → **Ran 109 tests, OK**.
+
+**Environment note (cost real time, worth recording).** The first `git fetch`
+failed with `schannel: server closed abruptly (missing close_notify)`, then with
+`OpenSSL SSL_read: unexpected eof while reading` after switching the TLS
+backend. The cause was not GitHub: `$HTTPS_PROXY` pointed at
+`http://127.0.0.1:56057`, which answered `502 CONNECT tunnel failed`. Probing
+local proxy ports found `127.0.0.1:7897` healthy (`https://github.com` → 200 in
+1.2 s). The push was then done with a per-command override so no stale proxy is
+baked into the repository config:
+
+```
+git -c http.proxy=http://127.0.0.1:7897 push origin main
+```
+
+`http.sslBackend` was left unset (Windows default) after the experiment.
 
 ## 13. Remaining gaps
 
