@@ -1,0 +1,80 @@
+{
+  "task": "login-user",
+  "seed": 20001,
+  "instruction": "Enter the username \"michel\" and the password \"CX\" into the text fields and press login.",
+  "success": true,
+  "final_reward": 1.0,
+  "reward": 1.0,
+  "status": "success",
+  "error": null,
+  "steps": [
+    {
+      "step": 0,
+      "input_tokens": 375,
+      "history_used": 0,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>click(0.2139,0.4136)</action>",
+      "action": "<action>click(0.2139,0.4136)</action>",
+      "action_kind": "click",
+      "reward": 0.0,
+      "env_error": ""
+    },
+    {
+      "step": 1,
+      "input_tokens": 404,
+      "history_used": 1,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>type(\"michel\")</action>",
+      "action": "<action>type(\"michel\")</action>",
+      "action_kind": "type",
+      "reward": 0.0,
+      "env_error": ""
+    },
+    {
+      "step": 2,
+      "input_tokens": 418,
+      "history_used": 2,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>click(0.1837,0.6565)</action>",
+      "action": "<action>click(0.1837,0.6565)</action>",
+      "action_kind": "click",
+      "reward": 0.0,
+      "env_error": ""
+    },
+    {
+      "step": 3,
+      "input_tokens": 441,
+      "history_used": 3,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>type(\"CX\")</action>",
+      "action": "<action>type(\"CX\")</action>",
+      "action_kind": "type",
+      "reward": 0.0,
+      "env_error": ""
+    },
+    {
+      "step": 4,
+      "input_tokens": 454,
+      "history_used": 4,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>click(0.1365,0.8481)</action>",
+      "action": "<action>click(0.1365,0.8481)</action>",
+      "action_kind": "click",
+      "reward": 1.0,
+      "env_error": ""
+    }
+  ],
+  "num_steps": 5,
+  "prompt_tokens": 454,
+  "seconds": 7.641
+}

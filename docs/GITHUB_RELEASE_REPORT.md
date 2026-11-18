@@ -130,13 +130,37 @@ screenshots only).
 
 ## 9. Real-checkpoint integration
 
-**BLOCKED.** The release machine has no V14/V11 GUI checkpoint (only P1.5/P1.6
-language checkpoints and the SigLIP2 weights), no BrowserGym/Playwright install,
-and no reachable HPC (`10.120.21.247:22` timed out). Consequently:
+**DONE / VERIFIED (2026-11-18).** The repository code was run against the real
+V14 checkpoint (`experiments/v14_scaled/.../final_00000700`, 261 MB) on the A40
+allocated to this project. Loading reported
+`parameters: lm 63,912,192 / proj 1,182,720 / compressor 198,657 / tile_pos 3,840
+/ total 65,297,409`, and two BrowserGym episodes succeeded end to end:
 
-- NOT RUN: loading a real V14 checkpoint, generating a real action, executing a
-  BrowserGym episode, recording a demo GIF.
-- NOT RUN: re-measuring 75/240. The README marks it as a historical result.
+| Episode | Steps | Result |
+|---|---:|---|
+| `scroll-text-2` seed 20008 | 2 | success, reward 1.0 |
+| `login-user` seed 20001 | 5 | success, reward 1.0 |
+
+Producing them exposed **six real defects that would have made the published
+commands fail for any user**. All are fixed and covered by tests:
+
+| # | Symptom | Cause | Fix |
+|---|---|---|---|
+| 1 | `checkpoint ... missing=['lm.model.embed_tokens.weight']` — load refused | V14 checkpoints store only `lm_head.weight` because embeddings are tied (`tie_word_embeddings=true`); the strict check counted the tied twin as missing | `_TIED_PARTNERS` + `_tie_intact()` in `models/vision.py`: a tied partner present in the checkpoint satisfies the missing key, and the tie is asserted afterwards |
+| 2 | `BrowserEnv.__init__() got an unexpected keyword argument 'wait_for_action'` | the arg was renamed across BrowserGym releases (`pre_observation_delay` ↔ `wait_for_action`) | `make_env` probes the constructor signature and passes whichever exists |
+| 3 | `RuntimeError: Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor)` | `FrozenSigLIP2` attached the encoder with `object.__setattr__`, so `.to(device)` never reached it | encoder is a normally registered submodule (still frozen, still absent from action checkpoints) |
+| 4 | `KeyError: 'viewport'`, and silently wrong clicks | the loop read `obs["viewport"]`; MiniWoB renders a 498×321 screenshot over a 332×214 CSS viewport (1.5×) | coordinates are scaled by the screenshot size the model actually saw |
+| 5 | every `scroll_at(cx,cy,dx,dy)` step failed to parse | the parser accepted only `scroll(dx,dy)`, but checkpoints trained on older data emit the four-argument form | `ACTION_RE` accepts both spellings; four arguments keep their centre and the V14 sign convention |
+| 6 | scroll actions truncated mid-token | `DEFAULT_RL["max_new"]=24` shadowed the protocol's 48 | default raised to 48 with a comment; `rl_settings` falls back to `eval.max_new` |
+
+Defect 5 + 6 interact and are the clearest evidence of why this pass mattered:
+before the fix, `scroll-text-2` seed 20008 failed with 4 steps of parse errors;
+after it, the *same checkpoint, same seed* succeeds in 2 steps and the GIF in
+`assets/demo/` is that run.
+
+Still **NOT RUN**: a full 240-episode re-measurement with this code. The
+published 75/240 remains the historical figure measured by the research
+scripts, and the README says so.
 
 ## 10. README metric corrections
 
@@ -197,8 +221,9 @@ git -c http.proxy=http://127.0.0.1:7897 push origin main
 
 | Item | Status |
 |---|---|
-| Real V14 checkpoint integration / 240-episode re-run | BLOCKED (no weights, no browser, HPC unreachable) |
-| Demo GIF | BLOCKED (depends on the above); recorder and trace format are ready |
+| Real V14 checkpoint integration | **DONE / VERIFIED** — 65,297,409 params, 2 successful episodes |
+| Demo GIF | **DONE** — `assets/demo/scroll-text-2_seed20008.gif`, `login-user_seed20001.gif` (real screenshots) |
+| 240-episode re-run with the release code | NOT RUN (a full re-measurement was out of scope; historical 75/240 stands) |
 | GUI SFT full 700-step re-run | NOT RUN (out of scope: no new long training authorised) |
 | Agentic RL re-run | NOT RUN (out of scope) |
 | Speech modality | not implemented in this release |

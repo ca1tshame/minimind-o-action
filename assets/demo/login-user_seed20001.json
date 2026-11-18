@@ -1,0 +1,14 @@
+{
+  "trace": "out_demo\\login-user_20001.json",
+  "trace_sha256": "e290a01d0d8407c55d22c566e46ff8fac65f57424b909d4631eaba38b2df19eb",
+  "frames_dir": "out_demo\\login-user_20001_frames",
+  "gif": "assets\\demo\\login-user_seed20001.gif",
+  "gif_sha256": "2be99998aa5cd83accd50094c5e20fe559adefde08c6f08adbec00e433e28ce9",
+  "task": "login-user",
+  "seed": 20001,
+  "success": true,
+  "final_reward": 1.0,
+  "steps": 5,
+  "replay_note": "real rollout recorded from the student checkpoint",
+  "fps": 2
+}

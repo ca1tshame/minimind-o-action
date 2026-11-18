@@ -1,0 +1,41 @@
+{
+  "task": "scroll-text-2",
+  "seed": 20008,
+  "instruction": "Scroll the textarea to the top of the text hit submit.",
+  "success": true,
+  "final_reward": 1.0,
+  "reward": 1.0,
+  "status": "success",
+  "error": null,
+  "steps": [
+    {
+      "step": 0,
+      "input_tokens": 365,
+      "history_used": 0,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>scroll_at(0.2410,0.5140,0.0000,0.9000)</action>",
+      "action": "<action>scroll_at(0.2410,0.5140,0.0000,0.9000)</action>",
+      "action_kind": "scroll",
+      "reward": 0.0,
+      "env_error": ""
+    },
+    {
+      "step": 1,
+      "input_tokens": 406,
+      "history_used": 1,
+      "history_stubbed": 0,
+      "history_dropped": 0,
+      "error_feedback": "",
+      "output": "<action>click(0.1498,0.8435)</action>",
+      "action": "<action>click(0.1498,0.8435)</action>",
+      "action_kind": "click",
+      "reward": 1.0,
+      "env_error": ""
+    }
+  ],
+  "num_steps": 2,
+  "prompt_tokens": 406,
+  "seconds": 13.419
+}

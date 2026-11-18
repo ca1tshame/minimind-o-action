@@ -357,11 +357,28 @@ screenshot per step; `record_demo_gif.py` only overlays the step number, sampled
 action, reward and environment error on **those** screenshots, and writes
 `trace_sha256` / `gif_sha256` / `replay_note` next to the GIF.
 
-**Status on this release machine: not produced.** There is no V14 checkpoint
-and no BrowserGym/Playwright installation here, and the HPC host holding the
-checkpoint was unreachable. No GIF, click coordinate or success flag in this
-repository was fabricated; `assets/demo/` is intentionally empty until the
-commands above are run with real weights.
+**Status: produced, from the real V14 checkpoint.** On 2026-11-18 the V14
+action model was loaded with the code in this repository (65,297,409
+parameters, `proj.net.*` remapped, compressor/tile_pos attached before load)
+and run against BrowserGym/MiniWoB++ on an A40. Two episodes completed
+successfully; both GIFs are in `assets/demo/` with their traces:
+
+| Demo | Steps | Result | What it shows |
+|---|---:|---|---|
+| `scroll-text-2_seed20008` | 2 | **success, reward 1.0** | `scroll_at(...)` then `click` on the revealed button |
+| `login-user_seed20001` | 5 | **success, reward 1.0** | click → type → click → type → submit (multi-field form) |
+
+The scroll demo is worth reading closely: with the release-time default of
+`max_new=24` the model's `scroll_at(cx,cy,dx,dy)` output was cut to 24 tokens,
+so **every scroll step became a parse error and the episode failed**. Raising
+the budget to the protocol's 48 and accepting the four-argument spelling turned
+the same checkpoint, same seed, into a 2-step success. That is a code defect
+being fixed, not a model being retrained — see `docs/GITHUB_RELEASE_REPORT.md`
+§9 for the full list of blockers found while producing these runs.
+
+Frames are the environment's own screenshots; the overlay only annotates the
+action text the policy emitted and the reward the environment returned. No
+coordinate, step or success flag was authored by hand.
 
 ## 7. Limitations
 

@@ -1,0 +1,14 @@
+{
+  "trace": "out_demo\\scroll-text-2_20008.json",
+  "trace_sha256": "2ed825bbdefeb9c7ccaf71404c4de443aeeb8533f428363cae8c4268235a7400",
+  "frames_dir": "out_demo\\scroll-text-2_20008_frames",
+  "gif": "assets\\demo\\scroll-text-2_seed20008.gif",
+  "gif_sha256": "181c649dba9cbd05c4611f40a090c5696fecdc7e8d9a049bc506f051fe0ce703",
+  "task": "scroll-text-2",
+  "seed": 20008,
+  "success": true,
+  "final_reward": 1.0,
+  "steps": 2,
+  "replay_note": "real rollout recorded from the student checkpoint",
+  "fps": 2
+}
