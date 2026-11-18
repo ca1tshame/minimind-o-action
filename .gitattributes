@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.py text diff=python
+*.md text
+*.yaml text
+*.yml text
+*.json text
+*.toml text
+*.sh text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.safetensors binary
+*.pt binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary

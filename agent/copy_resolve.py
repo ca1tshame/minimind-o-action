@@ -1,47 +1,97 @@
-"""Copy-pointer resolution for type actions.
+"""Resolve ``@S:E`` / ``@S:E|lower`` / ``@S:E|upper`` copy pointers.
 
-Grammar inside the DSL string argument:
-  @S:E          copy instruction[S:E] verbatim
-  @S:E|lower    copy, then lowercase
-  @S:E|upper    copy, then uppercase
-
-The resolver never invents text: the result is always a substring of the given
-instruction, optionally case-transformed.
+The pointer refers to a character span of the task instruction (the text the
+policy is asked to copy).  Invalid spans are reported instead of silently
+producing an empty string; callers decide whether to feed the error back.
 """
+
+from __future__ import annotations
+
 import re
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple, Union
 
-POINTER = re.compile(r"^@(\d+):(\d+)(?:\|(lower|upper))?$")
+__all__ = ["CopyPointer", "POINTER", "parse_pointer", "resolve", "resolve_or_fallback"]
+
+POINTER = re.compile(r"^@([0-9]+):([0-9]+)(?:\|(lower|upper))?$")
 
 
-def resolve(args, instruction):
-    if not isinstance(args, str):
-        return None, {"ok": False, "reason": "not_str"}
-    match = POINTER.match(args.strip())
-    if not match:
-        return args, {"ok": True, "copy": False}
+@dataclass(frozen=True)
+class CopyPointer:
+    start: int
+    end: int
+    transform: Optional[str] = None
+
+    def __str__(self) -> str:
+        suffix = "|%s" % self.transform if self.transform else ""
+        return "@%d:%d%s" % (self.start, self.end, suffix)
+
+
+def parse_pointer(raw: str) -> CopyPointer:
+    match = POINTER.match(raw.strip())
+    if match is None:
+        raise ValueError("not a copy pointer: %r" % raw)
     start, end = int(match.group(1)), int(match.group(2))
-    transform = match.group(3)
-    if not (0 <= start < end <= len(instruction)):
-        return None, {
-            "ok": False, "reason": "out_of_range",
-            "s": start, "e": end, "len": len(instruction),
-        }
-    segment = instruction[start:end]
+    if end <= start:
+        raise ValueError("copy pointer %r has an empty span" % raw)
+    return CopyPointer(start, end, match.group(3))
+
+
+def _apply(text: str, transform: Optional[str]) -> str:
     if transform == "lower":
-        segment = segment.lower()
-    elif transform == "upper":
-        segment = segment.upper()
-    if not segment:
-        return None, {"ok": False, "reason": "empty"}
-    return segment, {
-        "ok": True, "copy": True, "s": start, "e": end,
-        "transform": transform, "source": instruction[start:end],
-    }
+        return text.lower()
+    if transform == "upper":
+        return text.upper()
+    return text
 
 
-def resolve_or_fallback(args, instruction):
-    """Return ``(text, meta)``; fall back to the literal argument if invalid."""
-    text, meta = resolve(args, instruction)
-    if text is None:
-        return args, {"ok": False, "fallback_literal": True, **meta}
-    return text, meta
+def resolve(args: Union[CopyPointer, str], instruction: str) -> Tuple[str, Dict[str, Any]]:
+    """Resolve a pointer against ``instruction``.
+
+    Returns ``(text, meta)``.  ``meta['error']`` is set when the pointer is
+    invalid; ``text`` is then empty and the caller should report the failure.
+    """
+    meta: Dict[str, Any] = {"kind": "copy_pointer", "instruction_length": len(instruction)}
+    if isinstance(args, str):
+        try:
+            pointer = parse_pointer(args)
+        except ValueError as exc:
+            meta["error"] = str(exc)
+            return "", meta
+    else:
+        pointer = args
+    if not isinstance(instruction, str):
+        meta["error"] = "instruction is not text"
+        return "", meta
+    if pointer.start < 0 or pointer.end > len(instruction) or pointer.start >= pointer.end:
+        meta["error"] = "copy span %d:%d outside instruction of length %d" % (
+            pointer.start, pointer.end, len(instruction)
+        )
+        return "", meta
+    raw = instruction[pointer.start:pointer.end]
+    if not raw or raw.strip() == "":
+        meta["error"] = "copy span %d:%d selects whitespace" % (pointer.start, pointer.end)
+        return "", meta
+    meta.update({"start": pointer.start, "end": pointer.end, "transform": pointer.transform})
+    return _apply(raw, pointer.transform), meta
+
+
+def resolve_or_fallback(args: Union[CopyPointer, str, None], instruction: str
+                        ) -> Tuple[str, Dict[str, Any]]:
+    """Resolve a pointer, falling back to a literal string when it is invalid.
+
+    Used by the executor for old checkpoints that emitted a literal inside
+    ``type()``; a bad pointer is still flagged in ``meta`` so evaluation can
+    record it as an action error.
+    """
+    if args is None:
+        return "", {"kind": "empty", "error": "no text"}
+    if isinstance(args, CopyPointer):
+        return resolve(args, instruction)
+    text = str(args)
+    if not text.startswith("@"):
+        return text, {"kind": "literal", "fallback_literal": False}
+    resolved, meta = resolve(text, instruction)
+    if not meta.get("error"):
+        return resolved, meta
+    return text, {"kind": "literal", "fallback_literal": True, "error": meta["error"]}

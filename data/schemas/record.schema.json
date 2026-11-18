@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ca1tshame/minimind-o-action/data/schemas/record.schema.json",
+  "title": "GUI SFT record",
+  "description": "One training example of the GUI SFT distillation dataset. Files are JSONL: one object per line, UTF-8, no trailing commas. 'frame' is relative to the frames root used at collection time (the same root passed to scripts/train_gui_sft.py as --frames-dir); absolute paths are invalid.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "episode_id",
+    "step",
+    "task",
+    "seed",
+    "instruction",
+    "frame",
+    "frame_sha256",
+    "history",
+    "error_feedback",
+    "target_action",
+    "action_kind",
+    "data_source",
+    "split",
+    "reward",
+    "success",
+    "target_point"
+  ],
+  "properties": {
+    "episode_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable episode identifier, e.g. 'click-dialog_20101'. Shared by all steps of one rollout."
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0-based index of this action inside the episode."
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MiniWoB task id (or the task id of the source environment)."
+    },
+    "seed": {
+      "type": "integer",
+      "description": "Environment seed of the episode; unique per (task, seed) rollout."
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Raw task instruction shown to the model (the MiniWoB goal text for oracle data)."
+    },
+    "frame": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(^|/)\\.\\.(/|$))",
+      "description": "Screenshot path relative to the frames root, POSIX separators. Backslashes are normalised to '/'."
+    },
+    "frame_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the screenshot bytes; used for integrity checks and content dedup."
+    },
+    "history": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Previous target actions of the same episode, oldest first, as <action>...</action> strings."
+    },
+    "error_feedback": {
+      "type": ["string", "null"],
+      "description": "Last environment/executor error shown to the policy, or null."
+    },
+    "target_action": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^<action>.+</action>$",
+      "description": "Constrained action DSL. click(x,y) and scroll(dx,dy) use normalised coordinates; type(\"...\") carries JSON-escaped text; type(@start:end|lower|upper) is the copy-pointer form; stop(done) ends the episode."
+    },
+    "action_kind": {
+      "type": "string",
+      "enum": ["click", "type", "scroll", "stop"],
+      "description": "Kind parsed from target_action; must agree with it."
+    },
+    "data_source": {
+      "type": "string",
+      "enum": ["v11_teacher", "v14_oracle", "gui_owl", "v5_old"],
+      "description": "Where the row came from. V14 oracle rows are never GUI-Owl rows."
+    },
+    "split": {
+      "type": "string",
+      "enum": ["train", "validation"],
+      "description": "train or validation. Frozen test rows are kept in a separate file and are never assigned to either split."
+    },
+    "reward": {
+      "type": ["number", "null"],
+      "description": "Environment reward of the episode, or null when the teacher did not record one. Must be finite."
+    },
+    "success": {
+      "type": ["boolean", "null"],
+      "description": "Environment-verified success of the episode. null means unverified; true must come from the environment, never from a heuristic."
+    },
+    "target_point": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "array",
+          "items": {"type": "number", "minimum": 0, "maximum": 1},
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ],
+      "description": "Normalised [x, y] for click rows (equal to the click coordinates), null otherwise."
+    }
+  },
+  "examples": [
+    {
+      "episode_id": "click-dialog_20101",
+      "step": 0,
+      "task": "click-dialog",
+      "seed": 20101,
+      "instruction": "Click the button to close the dialog.",
+      "frame": "datasets/v14_oracle/frames/v14_click-dialog_20101_0000.jpg",
+      "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "history": [],
+      "error_feedback": null,
+      "target_action": "<action>click(0.5000,0.5000)</action>",
+      "action_kind": "click",
+      "data_source": "v14_oracle",
+      "split": "train",
+      "reward": 1.0,
+      "success": true,
+      "target_point": [0.5, 0.5]
+    }
+  ]
+}

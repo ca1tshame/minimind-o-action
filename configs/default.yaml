@@ -15,6 +15,7 @@ model:
   rope_theta: 1000000.0
   tie_word_embeddings: true
   use_moe: false
+  # language backbone only (from-scratch pretrained, P1.5)
   parameters: 63912192
 
 vision:
@@ -25,6 +26,9 @@ vision:
   image_token: "<|image_pad|>"
   tokens_per_image: 64
   frozen: true
+  preprocess:
+    image_mean: [0.5, 0.5, 0.5]
+    image_std: [0.5, 0.5, 0.5]
   tile_layout:
     320: [64, 64, 64, 64, 64]
     160: [40, 30, 30, 30, 30]
@@ -32,18 +36,21 @@ vision:
     64: [64, 0, 0, 0, 0]
 
 paths:
-  workspace_root: null          # set via --workspace-root or MINIMIND_WORKSPACE
+  workspace_root: null          # --workspace-root or MINIMIND_WORKSPACE
   tokenizer_dir: null           # directory with tokenizer.json / tokenizer_config.json
   model_config: configs/model_config.json
-  vision_encoder_dir: null
+  vision_encoder_dir: null      # local siglip2-base-p32-256 directory
   pretrain_data: null
   pretrain_index: null
   sft_data: null
   gui_records_train: null
   gui_records_val: null
   gui_frames_dir: null
-  base_checkpoint: null
-  checkpoint: null
+  language_data: null
+  old_gui_data: null
+  base_checkpoint: null         # pretrained language backbone (P1.5/P1.6)
+  init_checkpoint: null         # GUI SFT init (V11 final for V14 reproduction)
+  checkpoint: null              # checkpoint to evaluate / run
   experiment_dir: outputs/experiments
   output_dir: outputs
   miniwob_url: null             # file:// URL to MiniWoB++ html
@@ -97,27 +104,50 @@ sft:
   reserve_seconds: 600
   overflow_policy: truncate_complete_assistant
 
+# V11/V14 GUI SFT recipe. The default values reproduce the V14 scaled run
+# (512-token context, 320 vision tokens, 700 steps, three weighted streams);
+# use configs/demo.yaml for a small single-GPU smoke run.
 gui_sft:
   max_length: 512
-  batch_size: 8
-  gradient_accumulation_steps: 1
-  max_updates: 507
-  epochs: 1
+  context: 512
+  vision_tokens: 320
+  hist_cap: 6
+  steps: 700
+  batch_new_gui: 4
+  batch_language: 1
+  batch_old_gui: 2
+  stream_weights:
+    new_gui: 0.75
+    language: 0.15
+    old_gui: 0.10
+  kind_weights:
+    click: 0.35
+    type: 1.00
+    scroll: 2.00
+    stop: 2.00
   learning_rate_proj: 0.00002
   learning_rate_lm: 0.000001
+  learning_rate_compressor: 0.00002
   weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
   grad_clip: 1.0
   warmup_steps: 20
+  gradient_accumulation_steps: 1
   eval_interval: 100
-  checkpoint_interval: 200
-  wall_seconds: 28800
-  reserve_seconds: 600
+  validation_batches: 8
+  checkpoint_interval: 100
+  seed: 4225
+  truncate_history: true
 
+# Formal evaluation protocol. historical = 15 tasks x 16 seeds = 240 episodes
+# (the protocol behind V11 64/240, V14 control 68/240 and V14 scaled 75/240),
+# all with hist_used=6 from V12 onward.
 eval:
   hist_used: 6
   context: 512
   vision_tokens: 320
-  max_steps: 20
+  max_steps: 8
   max_new: 48
   limit: 0
   history_reserve_tokens: 32
@@ -125,34 +155,51 @@ eval:
   protocols:
     historical:
       tasks:
-        - click-button-sequence
-        - click-checkboxes
-        - click-color
-        - click-dialog
-        - click-link
-        - click-test
-        - choose-list
-        - enter-text
+        - click-test-2
         - enter-text-2
-        - focus-text
+        - click-button-sequence
+        - click-dialog
+        - scroll-text-2
         - login-user
-        - login-user-popup
+        - click-test
+        - enter-text
+        - click-checkboxes
         - scroll-text
         - use-autocomplete
-      seeds: [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008,
-              9009, 9010, 9011, 9012, 9013, 9014, 9015]
+        - login-user-popup
+        - click-color
+        - click-link
+        - choose-list
+      seeds: [20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008,
+              20009, 20010, 20011, 20012, 20013, 20014, 20015, 20016]
+    seen:
+      tasks: [click-test-2, enter-text-2, click-button-sequence, click-dialog,
+              scroll-text-2, login-user]
+      seeds: [20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008,
+              20009, 20010, 20011, 20012, 20013, 20014, 20015, 20016]
+    related_unseen:
+      tasks: [click-test, enter-text, click-checkboxes, scroll-text,
+              use-autocomplete, login-user-popup]
+      seeds: [20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008,
+              20009, 20010, 20011, 20012, 20013, 20014, 20015, 20016]
+    distinct_unseen:
+      tasks: [click-color, click-link, choose-list]
+      seeds: [20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008,
+              20009, 20010, 20011, 20012, 20013, 20014, 20015, 20016]
     unseen:
       seed: 15101
       tasks_per_seed: 32
     long:
-      seed: 15101
-      num_tasks: 8
-      seeds_per_task: 8
+      tasks: [click-checkboxes, click-dialog, click-link, click-test,
+              enter-text, login-user, scroll-text, use-autocomplete]
+      seeds: [21001, 21002, 21003, 21004, 21005, 21006, 21007, 21008]
+      max_steps: 10
 
 distill:
   teacher_model: GUI-Owl-1.5-8B
   action_balance: true
-  dedup_key: [episode_id, step, data_source]
+  dedup_key: [frame_sha256, target_action, instruction:80]
+  blocked_seed_ranges: [[20001, 20016], [21001, 21008], [15101, 15101]]
 
 inference:
   max_steps: 6

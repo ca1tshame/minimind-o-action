@@ -1,188 +1,125 @@
-"""MiniWoB++ closed-loop evaluation under the unified hist_used=6 protocol.
+"""Real BrowserGym MiniWoB++ evaluation for MiniMind-O Action.
 
-The policy consumes only the goal, the screenshot tiles, and its own previous
-actions. Success is the environment's terminal reward; no DOM internals or
-oracle labels are read at inference. This is the evaluation logic used for the
-V11/V12/V13 main-line models.
+The formal protocol is 15 tasks x 16 seeds = 240 episodes with
+``hist_used=6``; ``--protocol historical`` reproduces it exactly.  Episodes
+are written as JSONL (``final_reward`` and ``reward`` both present) and
+aggregated by :mod:`eval.metrics`.
+
+Example::
+
+    python eval/miniwob_eval.py --workspace-root /data/minimind \\
+        --checkpoint checkpoints/gui_v14/payload/model.safetensors \\
+        --protocol historical --out outputs/eval/v14_hist240
 """
+
+from __future__ import annotations
+
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
-from agent.ctx_pack import compact_history
-from configs import load_config
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-
-def build_prompt(goal, image_tokens, history_text):
-    return (
-        "<|im_start|>user\n%s\nTask screenshot follows.%s<|vision_end|>\n"
-        "%s<|im_end|>\n<|im_start|>assistant\n"
-        % (goal, image_tokens, history_text)
-    )
+from agent.environment import configure_browser, run_episode
+from configs import (apply_overrides, load_config, resolve_paths, workspace_root)
+from eval.metrics import load_traces, summarize_episodes
 
 
-def run_suite(cfg, model, tasks, seeds, output, max_steps, hist_used, limit=0, resume=False):
-    """Run the cross-product of tasks and seeds, writing one JSONL per episode."""
-    from agent.environment import make_env
-    from agent.dsl import parse_action, to_browsergym
-
-    output = Path(output)
-    output.mkdir(parents=True, exist_ok=True)
-    screenshot_dir = output / "screenshots"
-    screenshot_dir.mkdir(exist_ok=True)
-
-    done = set()
-    episode_file = output / "episodes.jsonl"
-    if resume and episode_file.exists():
-        for line in episode_file.open(encoding="utf8"):
-            try:
-                entry = json.loads(line)
-                done.add((entry["task"], entry["seed"]))
-            except Exception:
-                continue
-
-    image_tokens = "<|image_pad|>" * cfg["eval"]["vision_tokens"]
-    history_budget = cfg["eval"]["history_reserve_tokens"] + 136
-    cases = [(task, seed) for task in tasks for seed in seeds]
-    if limit:
-        cases = cases[:limit]
-    cases = [case for case in cases if case not in done]
-
-    with episode_file.open("a", encoding="utf8", buffering=1) as handle:
-        for task, seed in cases:
-            env = None
-            steps = []
-            goal = ""
-            status = "error"
-            reward = 0.0
-            history = []
-            started = time.time()
-            try:
-                env = make_env(task, headless=True)
-                observation, _ = env.reset(seed=seed)
-                goal = observation.get("goal", "")
-                for step in range(max_steps):
-                    screen = observation["screenshot"]
-                    height, width = screen.shape[:2]
-                    history_text, _ = compact_history(
-                        history, model.tokenizer, history_budget,
-                        kind_only_after=cfg["eval"]["kind_only_after"],
-                    )
-                    prompt = build_prompt(goal, image_tokens, history_text)
-                    try:
-                        text = model.predict(screen, prompt)
-                    except ValueError as exc:
-                        if "context budget" not in str(exc):
-                            raise
-                        status = "context_overflow"
-                        steps.append({"step": step, "error": str(exc)})
-                        break
-                    row = {
-                        "step": step, "output": text,
-                        "history_used": min(hist_used, len(history)),
-                    }
-                    try:
-                        action = parse_action(text)
-                        command = to_browsergym(action, width, height)
-                        if command is None:
-                            status = "model_stop"
-                            steps.append(row)
-                            break
-                        row["executor"] = command
-                    except ValueError as exc:
-                        row["executor_error"] = str(exc)
-                        command = "noop(0)"
-                    observation, reward, terminated, truncated, _ = env.step(command)
-                    row.update({
-                        "reward": float(reward),
-                        "terminated": bool(terminated),
-                        "truncated": bool(truncated),
-                    })
-                    steps.append(row)
-                    history.append(text)
-                    if terminated or truncated:
-                        status = "environment_terminated" if terminated else "environment_truncated"
-                        break
-                else:
-                    status = "max_steps"
-            except Exception as exc:
-                status = "environment_error"
-                steps.append({"exception": type(exc).__name__ + ": " + str(exc)[:300]})
-            finally:
-                if env is not None:
-                    env.close()
-            episode = {
-                "task": task, "seed": seed, "goal": goal,
-                "success": bool(status == "environment_terminated" and reward > 0),
-                "reward": float(reward), "status": status,
-                "steps": steps, "seconds": time.time() - started,
-            }
-            handle.write(json.dumps(episode, ensure_ascii=False) + "\n")
-            print(task, seed, status, "reward", reward, flush=True)
-
-    meta = {
-        "condition": {
-            "hist_used": hist_used,
-            "context": cfg["eval"]["context"],
-            "vision_tokens": cfg["eval"]["vision_tokens"],
-        },
-        "tasks": list(tasks), "seeds": list(seeds),
-        "success_definition": "environment terminated with positive reward",
-    }
-    (output / "config.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf8"
-    )
+def resolve_episodes(cfg, protocol, subset=None, limit=0):
+    """Return an ordered list of ``(task, seed)`` pairs for a protocol."""
+    protocols = (cfg.get("eval") or {}).get("protocols") or {}
+    if protocol not in protocols:
+        raise ValueError("unknown protocol %r (have %s)"
+                         % (protocol, ", ".join(sorted(protocols))))
+    spec = protocols[protocol]
+    if "tasks" in spec and "seeds" in spec:
+        tasks = list(spec["tasks"])
+        if subset and subset != "all":
+            subset_spec = protocols.get(subset)
+            if not subset_spec or "tasks" not in subset_spec:
+                raise ValueError("unknown task subset %r" % subset)
+            allowed = set(subset_spec["tasks"])
+            tasks = [task for task in tasks if task in allowed]
+        pairs = [(task, int(seed)) for task in tasks for seed in spec["seeds"]]
+    elif protocol == "unseen":
+        seed = int(spec["seed"])
+        count = int(spec.get("tasks_per_seed", 32))
+        all_tasks = []
+        for name in ("seen", "related_unseen", "distinct_unseen"):
+            all_tasks.extend(protocols.get(name, {}).get("tasks", []))
+        all_tasks = sorted(set(all_tasks))
+        if not all_tasks:
+            raise ValueError("unseen protocol needs task lists in config")
+        pairs = [(all_tasks[i % len(all_tasks)], seed) for i in range(count)]
+    elif protocol == "long":
+        pairs = [(task, int(seed)) for task in spec["tasks"] for seed in spec["seeds"]]
+    else:
+        raise ValueError("protocol %r needs explicit tasks and seeds" % protocol)
+    if limit and limit > 0:
+        pairs = pairs[: int(limit)]
+    return pairs
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="MiniWoB++ closed-loop evaluation.")
-    parser.add_argument("--config")
-    parser.add_argument("--workspace-root")
-    parser.add_argument("--protocol", choices=["historical", "unseen", "long"], default="historical")
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--hist-used", type=int)
-    parser.add_argument("--context", type=int)
-    parser.add_argument("--vision-tokens", type=int)
-    parser.add_argument("--max-steps", type=int)
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--resume", action="store_true")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--workspace-root", default=None)
+    parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--protocol", default="historical")
+    parser.add_argument("--subset", default=None,
+                        help="filter historical tasks to seen/related_unseen/distinct_unseen")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--max-new", type=int, default=None)
+    parser.add_argument("--context", type=int, default=None)
+    parser.add_argument("--hist-used", type=int, default=None)
+    parser.add_argument("--out", default="outputs/eval")
+    parser.add_argument("--no-headless", action="store_true")
     args = parser.parse_args(argv)
 
-    cfg = load_config(args.config, {
-        "paths.workspace_root": args.workspace_root,
-        "eval.hist_used": args.hist_used,
-        "eval.context": args.context,
-        "eval.vision_tokens": args.vision_tokens,
-    })
-    eval_cfg = cfg["eval"]
-    protocol = cfg["eval"]["protocols"][args.protocol]
-    if args.protocol == "historical":
-        tasks = protocol["tasks"]
-        seeds = protocol["seeds"]
-    elif args.protocol == "unseen":
-        tasks = protocol["tasks"] if "tasks" in protocol else []
-        seeds = [protocol["seed"]]
-    else:
-        tasks = protocol["tasks"] if "tasks" in protocol else []
-        seeds = [protocol["seed"]]
-
-    if not tasks:
-        raise ValueError("protocol %s has no task list in config" % args.protocol)
+    cfg = load_config(args.config)
+    apply_overrides(cfg, {"paths.workspace_root": args.workspace_root})
+    root = workspace_root(cfg, args.workspace_root)
+    resolved = resolve_paths(cfg, root)
+    for key in ("miniwob_url", "playwright_browsers_path"):
+        if resolved.get(key):
+            cfg.setdefault("paths", {})[key] = resolved[key]
+    configure_browser(cfg)
 
     from scripts.inference import build_predictor
-    model = build_predictor(cfg)
-    run_suite(
-        cfg, model, tasks, seeds, args.output,
-        args.max_steps or eval_cfg["max_steps"],
-        eval_cfg["hist_used"], args.limit or eval_cfg["limit"], args.resume,
-    )
+
+    policy = build_predictor(cfg, workspace=root, checkpoint=args.checkpoint,
+                             device=args.device)
+    pairs = resolve_episodes(cfg, args.protocol, args.subset, args.limit)
+    out_dir = Path(args.out)
+    if not out_dir.is_absolute():
+        out_dir = root / out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    episode_path = out_dir / "episodes.jsonl"
+    if episode_path.exists():
+        raise FileExistsError("refusing to append to an existing run: %s" % episode_path)
+    episodes = []
+    for index, (task, seed) in enumerate(pairs, 1):
+        trace = run_episode(
+            policy, task, cfg, seed=seed, headless=not args.no_headless,
+            max_steps=args.max_steps, max_new_tokens=args.max_new, context=args.context,
+            hist_used=args.hist_used, record_path=episode_path,
+            instruction=(cfg.get("eval") or {}).get("instruction"),
+        )
+        episodes.append(trace)
+        print("[%d/%d] %s seed=%s success=%s reward=%.3f steps=%d %s"
+              % (index, len(pairs), task, seed, trace["success"], trace["final_reward"],
+                 trace["num_steps"], trace["status"]))
+    summary = summarize_episodes(episodes)
+    summary.update({"protocol": args.protocol, "subset": args.subset})
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

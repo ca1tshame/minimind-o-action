@@ -34,3 +34,6 @@ __pycache__/
 # OS / editor files
 .DS_Store
 Thumbs.db
+
+# Local tooling state (DSH project memory)
+.dsh-project-memory/

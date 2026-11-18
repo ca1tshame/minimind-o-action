@@ -1,0 +1,22 @@
+# Tiny smoke configuration -- NOT the published V11/V14 recipe.
+# Purpose: verify the GUI SFT trainer end to end on a single small dataset.
+# Reproducing V14 requires configs/default.yaml (512 context, 320 vision
+# tokens, 700 steps, 2,552 train rows).
+gui_sft:
+  steps: 20
+  context: 256
+  max_length: 256
+  vision_tokens: 320
+  batch_new_gui: 2
+  batch_language: 1
+  batch_old_gui: 1
+  validation_batches: 2
+  eval_interval: 10
+  checkpoint_interval: 10
+
+eval:
+  limit: 8
+  protocols:
+    historical:
+      tasks: [click-dialog]
+      seeds: [20001, 20002]

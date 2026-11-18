@@ -158,3 +158,142 @@ def lm_hidden_forward(lm, hidden, mask, start=0):
 def build_backbone(config):
     """Instantiate the language backbone from a config dict."""
     return MiniMindForCausalLM(MiniMindConfig(**config))
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint loading contract
+# ---------------------------------------------------------------------------
+
+# The original MiniMind-O checkpoints store the projector as ``proj.net.*``
+# (``nn.Sequential`` named ``net``); the clean rebuild calls it ``proj.mlp.*``.
+PROJECTOR_KEY_MAP = (("proj.net.", "proj.mlp."),)
+
+
+class ActionWeightError(RuntimeError):
+    """A checkpoint cannot be loaded without leaving core modules random."""
+
+
+def remap_action_keys(state):
+    """Rename legacy projector keys and strip ``_orig_mod.`` compile prefixes."""
+    mapped, renamed = {}, 0
+    for key, value in state.items():
+        new = key[len("_orig_mod."):] if key.startswith("_orig_mod.") else key
+        for old, current in PROJECTOR_KEY_MAP:
+            if new.startswith(old):
+                new = current + new[len(old):]
+                break
+        renamed += int(new != key)
+        mapped[new] = value
+    return mapped, renamed
+
+
+def action_parameter_report(model):
+    """Return parameter counts per action-model component."""
+    def count(prefix):
+        return sum(p.numel() for name, p in model.named_parameters()
+                   if name.startswith(prefix))
+
+    return {
+        "lm": sum(p.numel() for p in model.lm.parameters()),
+        "proj": sum(p.numel() for p in model.proj.parameters()),
+        "compressor": count("compressor."),
+        "tile_pos": count("tile_pos."),
+        "total": sum(p.numel() for p in model.parameters()),
+    }
+
+
+def load_action_model(model, path, *, require_tile=True, allow_missing=(),
+                      allow_extra=(), strict=True):
+    """Load a V14 action checkpoint with explicit key validation.
+
+    * legacy ``proj.net.*`` keys are mapped to ``proj.mlp.*``;
+    * frozen ``vision_encoder.*`` weights are dropped (the encoder is loaded
+      separately from ``paths.vision_encoder_dir``);
+    * the TileCompressor and tile_pos must already be attached *and* present
+      in the checkpoint when ``require_tile`` is true, so the model can never
+      look "loaded" while two core modules are still random;
+    * remaining missing/unexpected keys are an error unless explicitly
+      allow-listed (``allow_missing`` / ``allow_extra`` prefixes).
+
+    Returns a report dict describing exactly what happened.
+    """
+    try:
+        from safetensors.torch import load_file
+    except ImportError as exc:  # pragma: no cover - safetensors is a hard dep
+        raise ActionWeightError("safetensors is required to load checkpoints") from exc
+    path = str(path)
+    state = load_file(path)
+    state, renamed = remap_action_keys(state)
+    dropped = [key for key in state if key.startswith("vision_encoder.")]
+    for key in dropped:
+        del state[key]
+
+    if require_tile:
+        if getattr(model, "compressor", None) is None or getattr(model, "tile_pos", None) is None:
+            raise ActionWeightError(
+                "attach_tile_compression() must run before load_action_model(); "
+                "otherwise compressor/tile_pos are random"
+            )
+        for prefix in ("compressor.", "tile_pos."):
+            if not any(key.startswith(prefix) for key in state):
+                raise ActionWeightError(
+                    "checkpoint %s has no %s weights: refusing to load a model "
+                    "whose tile compression module would stay random" % (path, prefix)
+                )
+
+    incompatible = model.load_state_dict(state, strict=False)
+    missing = [k for k in incompatible.missing_keys
+               if not any(k.startswith(p) for p in allow_missing)]
+    unexpected = [k for k in incompatible.unexpected_keys
+                  if not any(k.startswith(p) for p in allow_extra)]
+    if strict and (missing or unexpected):
+        raise ActionWeightError(
+            "checkpoint %s does not match the model: missing=%s unexpected=%s"
+            % (path, missing[:20], unexpected[:20])
+        )
+    counts = action_parameter_report(model)
+    if require_tile and counts["compressor"] <= 0:
+        raise ActionWeightError("compressor has no parameters after loading")
+    return {
+        "path": path,
+        "renamed_keys": renamed,
+        "dropped_vision_encoder_keys": len(dropped),
+        "missing_keys": incompatible.missing_keys,
+        "unexpected_keys": incompatible.unexpected_keys,
+        "ignored_missing": missing,
+        "ignored_unexpected": unexpected,
+        "parameters": counts,
+    }
+
+
+def load_lm_checkpoint(lm, path, expected_parameters=None):
+    """Strictly load the backbone weights of an action or language checkpoint.
+
+    Action checkpoints store the backbone under ``lm.model.*`` / ``lm.lm_head.*``
+    (because ``GuiActionModel`` wraps it); language checkpoints store the same
+    tensors without the prefix.  Only backbone tensors are selected here, so a
+    full V14 checkpoint can be used for the language parameters while the
+    projector/compressor/tile_pos are validated separately.
+    """
+    from safetensors.torch import load_file
+
+    raw, _renamed = remap_action_keys(load_file(str(path)))
+    state = {}
+    for key, value in raw.items():
+        if key.startswith("lm."):
+            state[key[3:]] = value
+        elif key.startswith("model.") or key.startswith("lm_head."):
+            state[key] = value
+    incompatible = lm.load_state_dict(state, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise ActionWeightError(
+            "language checkpoint %s mismatch: missing=%s unexpected=%s"
+            % (path, incompatible.missing_keys[:20], incompatible.unexpected_keys[:20])
+        )
+    total = sum(p.numel() for p in lm.parameters())
+    if expected_parameters is not None and total != int(expected_parameters):
+        raise ActionWeightError(
+            "language backbone has %d parameters, expected %d"
+            % (total, int(expected_parameters))
+        )
+    return total
