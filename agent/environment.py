@@ -71,12 +71,27 @@ def make_env(task: str, headless: bool = True, delay: float = 0.05):
             "BrowserGym is not installed: pip install 'minimind-o-action[eval]'"
         ) from exc
     action_set = HighLevelActionSet(subsets=["coord"], strict=False, multiaction=False)
-    env = gym.make(
-        "browsergym/miniwob." + task,
-        action_mapping=action_set.to_python_code,
-        headless=headless,
-        wait_for_action=lambda *_: delay,
-    )
+    kwargs = {
+        "action_mapping": action_set.to_python_code,
+        "headless": headless,
+    }
+    # BrowserGym renamed this argument over time: older releases accept
+    # ``pre_observation_delay`` (seconds) and newer ones ``wait_for_action``
+    # (a callable). Passing the wrong one raises TypeError from the env
+    # constructor, so probe the signature instead of hard-coding a version.
+    try:
+        import inspect
+
+        from browsergym.core.env import BrowserEnv
+
+        params = inspect.signature(BrowserEnv.__init__).parameters
+    except Exception:  # pragma: no cover - introspection is best-effort
+        params = {}
+    if "wait_for_action" in params:
+        kwargs["wait_for_action"] = lambda *_: delay
+    elif "pre_observation_delay" in params:
+        kwargs["pre_observation_delay"] = delay
+    env = gym.make("browsergym/miniwob." + task, **kwargs)
     return env
 
 
@@ -191,8 +206,12 @@ def run_episode(policy: Any, task: str, cfg: Dict[str, Any], *, seed: Optional[i
                 break
             record["output"] = text
             try:
-                command, kind, value = decode_action(text, obs["viewport"]["width"],
-                                                     obs["viewport"]["height"], goal)
+                # Coordinates must be scaled by the *screenshot* size, not the
+                # CSS viewport: MiniWoB renders at 498x321 while the viewport is
+                # 332x214 (1.5x), so using the viewport silently misclicks
+                # everything. The screenshot is what the model actually saw.
+                shot_h, shot_w = screen.shape[:2]
+                command, kind, value = decode_action(text, shot_w, shot_h, goal)
             except ActionParseError as exc:
                 error = str(exc)[:120]
                 record["parse_error"] = error

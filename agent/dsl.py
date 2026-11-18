@@ -42,7 +42,7 @@ KEY_NAMES = ("Enter", "Tab", "Backspace", "Escape", "ArrowUp", "ArrowDown")
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.S)
 ACTION_RE = re.compile(
-    r"<action>\s*(click|scroll|type|key|stop)\s*\((.*?)\)\s*</action>", re.S
+    r"<action>\s*(click|scroll_at|scroll|type|key|stop)\s*\((.*?)\)\s*</action>", re.S
 )
 _STOP_VALUES = ("", "done", "failed")
 
@@ -141,6 +141,10 @@ def parse_action(text: str, instruction: Optional[str] = None) -> Tuple[str, Any
         )
     kind = match.group(1)
     raw = match.group(2).strip()
+    if kind == "scroll_at":
+        # same action, legacy spelling; the arity check below distinguishes
+        # scroll(dx,dy) from scroll_at(cx,cy,dx,dy)
+        kind = "scroll"
 
     if kind == "click":
         parts = _split_args(raw)
@@ -154,14 +158,36 @@ def parse_action(text: str, instruction: Optional[str] = None) -> Tuple[str, Any
 
     if kind == "scroll":
         parts = _split_args(raw)
-        if len(parts) != 2:
-            raise ActionParseError("scroll() requires dx,dy; got %r" % raw)
-        dx = _finite_float(parts[0], "scroll dx")
-        dy = _finite_float(parts[1], "scroll dy")
+        # Two spellings occur in real V14 output, both with the same V14 scroll
+        # semantics (dy<0 == page down):
+        #   scroll(dx, dy)                  -- the documented form
+        #   scroll_at(cx, cy, dx, dy)       -- emitted by checkpoints whose SFT
+        #                                      data predates the 2-arg form; the
+        #                                      centre is where the wheel event
+        #                                      goes, so cx/cy are honoured when
+        #                                      the executor supports it and
+        #                                      otherwise the viewport centre is
+        #                                      used.
+        if len(parts) == 4:
+            cx = _finite_float(parts[0], "scroll cx")
+            cy = _finite_float(parts[1], "scroll cy")
+            dx = _finite_float(parts[2], "scroll dx")
+            dy = _finite_float(parts[3], "scroll dy")
+            for name, value in (("cx", cx), ("cy", cy)):
+                if not 0.0 <= value <= 1.0:
+                    raise ActionParseError(
+                        "scroll_at %s must be in [0,1], got %r" % (name, value))
+        elif len(parts) == 2:
+            cx = cy = None
+            dx = _finite_float(parts[0], "scroll dx")
+            dy = _finite_float(parts[1], "scroll dy")
+        else:
+            raise ActionParseError(
+                "scroll() requires dx,dy (or scroll_at cx,cy,dx,dy); got %r" % raw)
         for value in (dx, dy):
             if not -1.0 <= value <= 1.0:
                 raise ActionParseError("scroll deltas must be in [-1,1], got (%r,%r)" % (dx, dy))
-        return kind, (dx, dy)
+        return kind, ((dx, dy) if cx is None else (dx, dy, cx, cy))
 
     if kind == "type":
         return kind, _parse_type(raw, instruction)
@@ -181,6 +207,9 @@ def format_action(kind: str, value: Any) -> str:
     if kind == "click":
         return "<action>click(%.4f,%.4f)</action>" % (value[0], value[1])
     if kind == "scroll":
+        if len(value) == 4:
+            dx, dy, cx, cy = value
+            return "<action>scroll_at(%.4f,%.4f,%.4f,%.4f)</action>" % (cx, cy, dx, dy)
         return "<action>scroll(%.4f,%.4f)</action>" % (value[0], value[1])
     if kind == "type":
         if isinstance(value, CopyPointer):
@@ -207,9 +236,15 @@ def to_browsergym(action: Tuple[str, Any], width: int, height: int,
         y = min(max(value[1], 0.0), 1.0)
         return "mouse_click(%d,%d)" % (int(x * (width - 1)), int(y * (height - 1)))
     if kind == "scroll":
-        dx, dy = value
+        if len(value) == 4:
+            dx, dy, cx, cy = value
+            centre_x = int(min(max(cx, 0.0), 1.0) * (width - 1))
+            centre_y = int(min(max(cy, 0.0), 1.0) * (height - 1))
+        else:
+            dx, dy = value
+            centre_x, centre_y = width // 2, height // 2
         return "scroll_at(%d,%d,%d,%d)" % (
-            width // 2, height // 2, int(round(-dx * width)), int(round(-dy * height))
+            centre_x, centre_y, int(round(-dx * width)), int(round(-dy * height))
         )
     if kind == "type":
         if isinstance(value, CopyPointer):

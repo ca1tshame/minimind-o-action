@@ -53,7 +53,12 @@ class FrozenSigLIP2(nn.Module):
         )
         for param in encoder.parameters():
             param.requires_grad_(False)
-        object.__setattr__(self, "encoder", encoder.eval())
+        # Registered as a real submodule on purpose: only then do ``.to(device)``,
+        # ``.eval()`` and ``.half()`` reach the encoder. It is frozen via
+        # requires_grad_(False) and it never lands in an action checkpoint
+        # (GUIDE: the action model's state_dict does not contain it, and
+        # ``load_action_model`` drops any ``vision_encoder.*`` keys).
+        self.encoder = encoder.eval()
 
     def forward(self, pixel_values):
         with torch.no_grad():
@@ -202,6 +207,28 @@ def action_parameter_report(model):
     }
 
 
+# Embedding names that MiniMind ties together (config.tie_word_embeddings=true).
+# A checkpoint stores only one of each pair; the other is loaded via the shared
+# tensor, so it must not be reported as a missing weight.
+_TIED_PARTNERS = {
+    "lm.model.embed_tokens.weight": "lm.lm_head.weight",
+    "lm.lm_head.weight": "lm.model.embed_tokens.weight",
+    "model.embed_tokens.weight": "lm_head.weight",
+    "lm_head.weight": "model.embed_tokens.weight",
+}
+
+
+def _tie_intact(model) -> bool:
+    """True when the language model really shares embedding and output weights."""
+    lm = getattr(model, "lm", model)
+    core = getattr(lm, "model", None)
+    head = getattr(lm, "lm_head", None)
+    embed = getattr(core, "embed_tokens", None) if core is not None else None
+    if head is None or embed is None:
+        return False
+    return embed.weight is head.weight
+
+
 def load_action_model(model, path, *, require_tile=True, allow_missing=(),
                       allow_extra=(), strict=True):
     """Load a V14 action checkpoint with explicit key validation.
@@ -242,10 +269,27 @@ def load_action_model(model, path, *, require_tile=True, allow_missing=(),
                 )
 
     incompatible = model.load_state_dict(state, strict=False)
+    # Tied embeddings: MiniMind shares embed_tokens.weight with lm_head.weight
+    # (config tie_word_embeddings=true), so a checkpoint stores only one of the
+    # two names. Loading either updates the same tensor in place, which means
+    # the other name shows up as "missing" while being fully loaded. Treat such
+    # keys as satisfied only when the tied partner really is in the checkpoint,
+    # and verify afterwards that the tie still holds.
+    satisfied_tied = []
+    for key in list(incompatible.missing_keys):
+        partner = _TIED_PARTNERS.get(key)
+        if partner and partner in state:
+            satisfied_tied.append(key)
     missing = [k for k in incompatible.missing_keys
-               if not any(k.startswith(p) for p in allow_missing)]
+               if k not in satisfied_tied
+               and not any(k.startswith(p) for p in allow_missing)]
     unexpected = [k for k in incompatible.unexpected_keys
                   if not any(k.startswith(p) for p in allow_extra)]
+    if satisfied_tied and not _tie_intact(model):
+        raise ActionWeightError(
+            "checkpoint %s relies on tied embeddings (%s) but the model does not "
+            "share embed_tokens.weight with lm_head.weight" % (path, satisfied_tied)
+        )
     if strict and (missing or unexpected):
         raise ActionWeightError(
             "checkpoint %s does not match the model: missing=%s unexpected=%s"

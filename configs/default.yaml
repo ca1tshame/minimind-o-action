@@ -203,5 +203,7 @@ distill:
 
 inference:
   max_steps: 6
-  max_new: 24
+  # 48 matches the evaluation protocol: a 4-argument scroll_at(...,...,...,...)
+  # action needs ~33 tokens, so 24 silently truncates every scroll step.
+  max_new: 48
   default_task: click-dialog

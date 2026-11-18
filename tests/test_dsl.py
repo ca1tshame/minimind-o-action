@@ -71,3 +71,50 @@ class DSLTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScrollSpellingTest(unittest.TestCase):
+    """Real V14 checkpoints emit both scroll spellings; both must survive.
+
+    ``scroll(dx,dy)`` is the documented form. Checkpoints trained on data that
+    predates it emit ``scroll_at(cx,cy,dx,dy)``. Rejecting the second one makes
+    the model look far worse than it is (every scroll step becomes a parse
+    error), so the parser normalises both and keeps the V14 sign convention.
+    """
+
+    def test_two_arg_scroll(self):
+        kind, value = parse_action("<action>scroll(0.0000,-0.9000)</action>")
+        self.assertEqual(kind, "scroll")
+        self.assertEqual(value, (0.0, -0.9))
+
+    def test_four_arg_scroll_is_accepted_and_keeps_semantics(self):
+        text = "<action>scroll_at(0.2410,0.5140,0.0000,0.9000)</action>"
+        kind, value = parse_action(text)
+        self.assertEqual(kind, "scroll")
+        self.assertEqual(value, (0.0, 0.9, 0.2410, 0.5140))
+        # dy>0 must still mean "page up" under the V14 convention
+        command = to_browsergym((kind, value), 498, 321)
+        self.assertEqual(command, "scroll_at(119,164,0,-289)")
+
+    def test_scroll_roundtrip_preserves_the_spelling(self):
+        text = "<action>scroll_at(0.2410,0.5140,0.0000,0.9000)</action>"
+        kind, value = parse_action(text)
+        self.assertEqual(format_action(kind, value), text)
+
+    def test_bad_arity_is_rejected(self):
+        for bad in (
+            "<action>scroll()</action>",
+            "<action>scroll(1,2,3)</action>",
+            "<action>scroll(0,0,0,0,0)</action>",
+        ):
+            with self.assertRaises(ActionParseError):
+                parse_action(bad)
+
+    def test_scroll_centre_out_of_range_is_rejected(self):
+        with self.assertRaises(ActionParseError):
+            parse_action("<action>scroll_at(1.5,0.5,0.0,0.9)</action>")
+
+    def test_scroll_centre_zero_consumes_no_new_tokens(self):
+        # sanity: the legacy spelling must not silently shift the delta
+        _, value = parse_action("<action>scroll_at(0.1,0.2,0.5,-0.5)</action>")
+        self.assertEqual(value, (0.5, -0.5, 0.1, 0.2))

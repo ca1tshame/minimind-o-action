@@ -95,3 +95,39 @@ class TileInjectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TiedEmbeddingTest(unittest.TestCase):
+    """A V14 checkpoint stores only lm_head.weight; embed_tokens is tied.
+
+    Loading must succeed and the two tensors must still be the same object,
+    otherwise the model would run with a randomly initialised embedding.
+    """
+
+    def test_embedding_only_in_checkpoint_is_not_missing(self):
+        model = tiny_action_model()
+        # emulate a real checkpoint: embeddings are tied, so only lm_head is saved
+        state = {k: v.detach().clone() for k, v in model.state_dict().items()
+                 if k != "lm.model.embed_tokens.weight"}
+        self.assertIn("lm.lm_head.weight", state)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "m.safetensors"
+            save_file(state, str(path))
+            report = load_action_model(model, path)
+        missing = [k for k in report["missing_keys"] if "embed_tokens" not in k]
+        self.assertEqual(missing, [])
+        self.assertIs(model.lm.model.embed_tokens.weight, model.lm.lm_head.weight)
+
+    def test_diverged_tie_is_an_error(self):
+        model = tiny_action_model()
+        # break the tie: now a checkpoint missing embed_tokens must be rejected
+        model.lm.model.embed_tokens.weight = torch.nn.Parameter(
+            model.lm.model.embed_tokens.weight.detach().clone()
+        )
+        state = {k: v.detach().clone() for k, v in model.state_dict().items()
+                 if k != "lm.model.embed_tokens.weight"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "m.safetensors"
+            save_file(state, str(path))
+            with self.assertRaises(ActionWeightError):
+                load_action_model(model, path)

@@ -80,7 +80,10 @@ DEFAULT_RL: Dict[str, Any] = {
     "grad_clip": 0.3,
     "weight_decay": 0.0,
     "max_steps": 6,
-    "max_new": 24,
+    # 48 is the evaluation protocol budget. At 24 a 4-argument
+    # scroll_at(cx,cy,dx,dy) is cut mid-token and every scroll step turns into
+    # a parse error, which silently understates the checkpoint's real ability.
+    "max_new": 48,
     "hist_used": 6,
     "vision_tokens": None,
     "context": None,
@@ -108,7 +111,7 @@ def rl_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.get("context"):
         settings["context"] = int(eval_cfg.get("context", 512))
     if not settings.get("max_new"):
-        settings["max_new"] = int(eval_cfg.get("max_new", 24))
+        settings["max_new"] = int(eval_cfg.get("max_new", 48))
     if settings.get("hist_used") is None:
         settings["hist_used"] = int(eval_cfg.get("hist_used", 6))
     settings["group_size"] = int(settings["group_size"])
