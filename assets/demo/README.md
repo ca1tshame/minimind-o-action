@@ -21,3 +21,13 @@ The `scroll-text-2` pair also documents a fixed defect: at the release default
 `max_new=24` the four-argument `scroll_at(cx,cy,dx,dy)` was truncated mid-token
 and the episode failed; at the protocol budget of 48 the same checkpoint and
 seed succeed in 2 steps.
+
+## V18 OpenApps Pure-Student Closed-Loop Demos (`v18_iter0/final_00001200`, `1920×1080`)
+
+| File | Content |
+|---|---|
+| `v18_demo1_composite_19step.gif` | **19 steps, success (48.8s)** — cross-app Calendar + Todo + Messages autonomous execution (`charlie_birthday_surprise`) |
+| `v18_demo2_frozen_msg_formal.gif` | **5 steps, success (15.9s)** — **ONE-SHOT Frozen-20** unseen formal-phrasing Messages execution (`v18_fz_msg_bob_formal`, where V17 failed) |
+| `v18_demo3_ood_unrelated_ctx.gif` | **5 steps, success (15.0s)** — **OOD-Dev 24** unrelated-context distractor robustness (`message_bob_to_meet__unrelated_context_1`, where V17 failed) |
+
+All three V18 GIFs are rendered strictly from real OpenApps BrowserGym screenshots saved in `rollouts.jsonl`, with the overlay annotating only the student's raw `<action>...</action>` output, predicted crosshair coordinate, and environment terminal reward.

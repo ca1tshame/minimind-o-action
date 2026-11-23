@@ -145,19 +145,25 @@ def preprocess_rgb(jpeg_bytes, vision_preprocess):
     return ((x - mean) / std).unsqueeze(0)
 
 
-def lm_hidden_forward(lm, hidden, mask, start=0):
+def lm_hidden_forward(lm, hidden, mask, start=0, past_key_values=None, use_cache=False):
     """Run the transformer stack over already-projected hidden states."""
     model = lm.model
     seq = hidden.shape[1]
     cos, sin = model.freqs_cos[start:start + seq], model.freqs_sin[start:start + seq]
     position_embeddings = (cos, sin)
     h = hidden
-    for layer in model.layers:
-        h, _ = layer(
-            h, position_embeddings, past_key_value=None,
-            use_cache=False, attention_mask=mask,
+    past_key_values = past_key_values or [None] * len(model.layers)
+    presents = []
+    for layer, past_kv in zip(model.layers, past_key_values):
+        h, present = layer(
+            h, position_embeddings, past_key_value=past_kv,
+            use_cache=use_cache, attention_mask=mask,
         )
-    return lm.lm_head(model.norm(h))
+        presents.append(present)
+    logits = lm.lm_head(model.norm(h))
+    if use_cache:
+        return logits, presents
+    return logits
 
 
 def build_backbone(config):
@@ -329,10 +335,23 @@ def load_lm_checkpoint(lm, path, expected_parameters=None):
         elif key.startswith("model.") or key.startswith("lm_head."):
             state[key] = value
     incompatible = lm.load_state_dict(state, strict=False)
-    if incompatible.missing_keys or incompatible.unexpected_keys:
+    satisfied_tied = []
+    for key in list(incompatible.missing_keys):
+        partner = _TIED_PARTNERS.get(key)
+        if partner and partner in state:
+            satisfied_tied.append(key)
+    missing = [k for k in incompatible.missing_keys if k not in satisfied_tied]
+    unexpected = list(incompatible.unexpected_keys)
+    if satisfied_tied and not _tie_intact(lm):
+        raise ActionWeightError(
+            "language checkpoint %s relies on tied embeddings (%s) but the model "
+            "does not share embed_tokens.weight with lm_head.weight"
+            % (path, satisfied_tied)
+        )
+    if missing or unexpected:
         raise ActionWeightError(
             "language checkpoint %s mismatch: missing=%s unexpected=%s"
-            % (path, incompatible.missing_keys[:20], incompatible.unexpected_keys[:20])
+            % (path, missing[:20], unexpected[:20])
         )
     total = sum(p.numel() for p in lm.parameters())
     if expected_parameters is not None and total != int(expected_parameters):

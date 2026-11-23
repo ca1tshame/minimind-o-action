@@ -25,8 +25,10 @@ __all__ = [
     "build_user_prompt",
     "compact_history",
     "count_tokens",
+    "format_screen_tag",
     "kind_stub",
     "render_history",
+    "resolve_screen_wh",
 ]
 
 _ACTION_KIND_RE = re.compile(r"<action>\s*([a-z_]+)")
@@ -72,13 +74,38 @@ def render_history(entries: Sequence[str]) -> str:
     return "; ".join(entry for entry in entries if entry)
 
 
+def resolve_screen_wh(screen_wh: Optional[Tuple[int, int]] = None) -> Optional[Tuple[int, int]]:
+    """Validate and normalize a ``(width, height)`` screen tuple, or return ``None``."""
+    if screen_wh is None:
+        return None
+    if not isinstance(screen_wh, (tuple, list)) or len(screen_wh) != 2:
+        raise ValueError("screen_wh must be a (width, height) pair, got %r" % (screen_wh,))
+    w, h = int(screen_wh[0]), int(screen_wh[1])
+    if w <= 0 or h <= 0:
+        raise ValueError("screen_wh dimensions must be positive, got (%d, %d)" % (w, h))
+    return (w, h)
+
+
+def format_screen_tag(screen_wh: Optional[Tuple[int, int]] = None) -> str:
+    """Format V18 resolution metadata ``Screen: {W}x{H}``; empty when unset."""
+    wh = resolve_screen_wh(screen_wh)
+    if wh is None:
+        return ""
+    return f"Screen: {wh[0]}x{wh[1]}"
+
+
 def build_user_prompt(goal: str, image_tokens: int, history_text: str = "",
-                      error: str = "") -> str:
-    """Render the V14 user turn (image placeholders are one token each)."""
+                      error: str = "",
+                      screen_wh: Optional[Tuple[int, int]] = None) -> str:
+    """Render the V14/V18 user turn (image placeholders are one token each)."""
     if image_tokens < 0:
         raise ValueError("image_tokens must be >= 0")
-    lines = ["<|im_start|>user", goal, "Task screenshot follows." + "<|image_pad|>" * image_tokens
-             + "<|vision_end|>"]
+    tag = format_screen_tag(screen_wh)
+    lines = ["<|im_start|>user", goal]
+    if tag:
+        lines.append(tag)
+    lines.append("Task screenshot follows." + "<|image_pad|>" * image_tokens
+                 + "<|vision_end|>")
     if history_text:
         lines.append("Previous actions: " + history_text)
     if error:
@@ -89,7 +116,8 @@ def build_user_prompt(goal: str, image_tokens: int, history_text: str = "",
 
 def assemble_prompt(tokenizer: Any, goal: str, image_tokens: int, history: Iterable[str],
                     context: int, max_new_tokens: int, *, error: str = "",
-                    hist_used: int = 6, min_history: int = 0) -> PackedPrompt:
+                    hist_used: int = 6, min_history: int = 0,
+                    screen_wh: Optional[Tuple[int, int]] = None) -> PackedPrompt:
     """Pack history under the true context budget and verify it fits.
 
     ``history`` entries are already-formatted action strings
@@ -105,7 +133,7 @@ def assemble_prompt(tokenizer: Any, goal: str, image_tokens: int, history: Itera
         entries = entries[-hist_used:]
     states: List[str] = ["verbatim"] * len(entries)
     dropped = 0
-    fixed_no_history = build_user_prompt(goal, image_tokens, "", error)
+    fixed_no_history = build_user_prompt(goal, image_tokens, "", error, screen_wh=screen_wh)
     # BOS is added by the caller; count it explicitly.
     base = 1 + count_tokens(tokenizer, fixed_no_history)
     budget = context - max_new_tokens - base
@@ -123,7 +151,7 @@ def assemble_prompt(tokenizer: Any, goal: str, image_tokens: int, history: Itera
 
     while True:
         history_text = render()
-        prompt = build_user_prompt(goal, image_tokens, history_text, error)
+        prompt = build_user_prompt(goal, image_tokens, history_text, error, screen_wh=screen_wh)
         input_tokens = 1 + count_tokens(tokenizer, prompt)
         if input_tokens + max_new_tokens <= context:
             used = sum(1 for state in states if state == "verbatim")

@@ -29,11 +29,10 @@ import torch
 from agent.ctx_pack import ContextOverflow, assemble_prompt, count_tokens
 from agent.dsl import parse_action, to_browsergym
 from agent.environment import configure_browser, run_episode
-from agent.vision_tiles import preprocess_tiles
+from agent.vision_tiles import attach_tile_compression, next_focus_xy, preprocess_tiles
 from configs import (REPO_ROOT as CONFIG_ROOT, load_config, require_paths,
                      resolve_device, resolve_paths, workspace_root)
 from models.minimind import MiniMindConfig, MiniMindForCausalLM
-from agent.vision_tiles import attach_tile_compression
 from models.vision import (FrozenSigLIP2, GuiActionModel,
                            action_parameter_report, lm_hidden_forward,
                            load_action_model, load_lm_checkpoint, preprocess_rgb)
@@ -55,6 +54,8 @@ class GUIPolicy:
         self.max_new = int(max_new)
         self.dtype = dtype
         self.max_position = int(max_position or model.lm.config.max_position_embeddings)
+        self.vision_layout = tuple(getattr(model, "vision_layout", (64, 64, 64, 64, 64)))
+        self.focus_enabled = len(self.vision_layout) == 6
         self.vision_preprocess = vision_preprocess or {
             "image_mean": [0.5, 0.5, 0.5], "image_std": [0.5, 0.5, 0.5],
         }
@@ -77,30 +78,41 @@ class GUIPolicy:
             )
 
     @torch.no_grad()
-    def predict(self, screen_rgb, prompt):
+    def predict(self, screen_rgb, prompt, *, focus_box=None, focus_xy=None,
+                history=None, error=""):
         ids = self.encode_prompt(prompt)
         self.check_budget(ids)
         image = screen_rgb
         if isinstance(image, np.ndarray):
             image = Image.fromarray(np.asarray(image, dtype=np.uint8))
-        tiles, _boxes = preprocess_tiles(image, self.vision_preprocess)
-        tiles = tiles.to(self.device)
-        features = self.encoder(tiles)               # (5, 64, 768) Tensor, not an object
+        if self.focus_enabled and focus_box is None and focus_xy is None:
+            focus_xy = next_focus_xy(history, error)
+        tiles, _boxes = preprocess_tiles(
+            image, self.vision_preprocess, focus_box=focus_box, focus_xy=focus_xy
+        )
+        tiles = tiles.to(self.device, dtype=self.dtype)
+        features = self.encoder(tiles)               # (5 or 6, 64, 768) Tensor, not an object
         features = features.reshape(1, -1, features.shape[-1])
         tokens = torch.tensor([ids], dtype=torch.long, device=self.device)
         hidden = self.model.lm.model.embed_tokens(tokens)
         mask = torch.ones_like(tokens)
         hidden = self.model.inject(tokens, hidden, mask, [[features[0]]])
         generated = []
+        past_kvs = None
+        pos = 0
         for _ in range(self.max_new):
-            logits = lm_hidden_forward(self.model.lm, hidden, mask)
+            cur_len = hidden.shape[1]
+            logits, past_kvs = lm_hidden_forward(
+                self.model.lm, hidden, mask if past_kvs is None else None,
+                start=pos, past_key_values=past_kvs, use_cache=True,
+            )
+            pos += cur_len
             next_id = int(torch.argmax(logits[0, -1]).item())
             if next_id == self.eos or next_id == 0:
                 break
             generated.append(next_id)
             step = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
-            hidden = torch.cat([hidden, self.model.lm.model.embed_tokens(step)], dim=1)
-            mask = torch.ones((1, hidden.shape[1]), dtype=torch.long, device=self.device)
+            hidden = self.model.lm.model.embed_tokens(step)
         return self.tokenizer.decode(generated)
 
 
@@ -141,8 +153,11 @@ def build_predictor(cfg, workspace=None, checkpoint=None, device=None):
     attach_tile_compression(model, vision_tokens)
     report = load_action_model(model, checkpoint)
     encoder = FrozenSigLIP2(paths["vision_encoder_dir"])
-    model = model.to(device).eval()
-    encoder = encoder.to(device)
+    dtype = torch.bfloat16 if (
+        str(device).startswith("cuda") and (cfg.get("device") or {}).get("precision") == "bf16"
+    ) else torch.float32
+    model = model.to(device=device, dtype=dtype).eval()
+    encoder = encoder.to(device=device, dtype=dtype).eval()
     tokenizer_dir = Path(paths["tokenizer_dir"])
     from transformers import AutoTokenizer
 
@@ -151,7 +166,7 @@ def build_predictor(cfg, workspace=None, checkpoint=None, device=None):
     policy = GUIPolicy(
         model, encoder, tokenizer, device=device,
         context=int(eval_cfg.get("context", 512)), max_new=int(eval_cfg.get("max_new", 48)),
-        dtype=torch.bfloat16 if (cfg.get("device") or {}).get("precision") == "bf16" else torch.float32,
+        dtype=dtype,
         vision_preprocess=(cfg.get("vision") or {}).get("preprocess"),
     )
     policy.load_report = report
@@ -171,12 +186,15 @@ def main(argv=None):
     parser.add_argument("--max-new", type=int, default=None)
     parser.add_argument("--context", type=int, default=None)
     parser.add_argument("--hist-used", type=int, default=None)
+    parser.add_argument("--vision-tokens", type=int, default=None)
     parser.add_argument("--record", default=None, help="episode JSONL output path")
     parser.add_argument("--no-headless", action="store_true")
     parser.add_argument("--dump-load-report", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     overrides = {"paths.workspace_root": args.workspace_root}
+    if args.vision_tokens is not None:
+        overrides["eval.vision_tokens"] = int(args.vision_tokens)
     from configs import apply_overrides
 
     apply_overrides(cfg, overrides)
